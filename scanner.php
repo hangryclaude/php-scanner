@@ -29,6 +29,7 @@ $RULES = [
         'id' => 'SQLI.001', 'severity' => 'high',
         'message' => 'Possible SQL injection: variable interpolated into a query',
         'pattern' => '/\b(?:mysql_query|mysqli_query|mysqli::query|mysqli_real_query|->query|->exec|->prepare)\s*\(\s*["\'](?:[^"\']*\{?\$|[^"\']*\.)/i',
+        'unless'  => '/(?:prepare|bind_param|bindValue|bindParam|execute)\s*\(/i',
         'fix' => 'Use prepared statements (PDO::prepare / mysqli_prepare) and bind parameters.',
     ],
     [
@@ -49,18 +50,21 @@ $RULES = [
         'id' => 'XSS.001', 'severity' => 'high',
         'message' => 'Unescaped superglobal echoed to the page (XSS)',
         'pattern' => '/\b(?:echo|print)\s+\$(?:_GET|_POST|_REQUEST|_COOKIE)\s*\[/i',
+        'unless'  => '/htmlspecialchars|htmlentities|strip_tags|urlencode|json_encode/i',
         'fix' => 'Wrap in htmlspecialchars($x, ENT_QUOTES, \'UTF-8\') before output.',
     ],
     [
         'id' => 'XSS.002', 'severity' => 'medium',
         'message' => 'Unescaped variable echoed (check whether it carries user input)',
         'pattern' => '/\b(?:echo|print)\s+\$[a-z_][a-z0-9_]*\s*(?:\.|;)/i',
+        'unless'  => '/htmlspecialchars|htmlentities|strip_tags|json_encode|\$row\[|\$line\b|\$count\b|\$i\b|\$total\b/i',
         'fix' => 'Escape output with htmlspecialchars().',
     ],
     [
         'id' => 'XSS.003', 'severity' => 'high',
         'message' => 'User input printed without escaping inside HTML',
         'pattern' => '/<\?=\s*\$(_GET|_POST|_REQUEST|_COOKIE)\s*\[/i',
+        'unless'  => '/htmlspecialchars|htmlentities/i',
         'fix' => 'Use <?= htmlspecialchars($x, ENT_QUOTES, \'UTF-8\') ?>.',
     ],
 
@@ -69,6 +73,7 @@ $RULES = [
         'id' => 'CMD.001', 'severity' => 'high',
         'message' => 'Possible command injection via user input',
         'pattern' => '/\b(?:system|exec|shell_exec|passthru|popen|proc_open|pcntl_exec)\s*\([^)]*\$_(?:GET|POST|REQUEST|COOKIE)/i',
+        'unless'  => '/escapeshellarg|escapeshellcmd/i',
         'fix' => 'Use escapeshellarg() on every user-controlled argument, or avoid shell calls.',
     ],
     [
@@ -225,6 +230,34 @@ $RULES = [
         'pattern' => '/\bif\s*\(\s*\$[a-z_]\w*\s*=\s*(?!=)[^)]+\)/i',
         'fix' => 'Likely a typo — use == for comparison.',
     ],
+
+    // --- Info disclosure & classic small-site hits ---------------------------
+    [
+        'id' => 'INFO.001', 'severity' => 'medium',
+        'message' => 'phpinfo() exposed (full config/paths/env disclosure)',
+        'pattern' => '/\bphpinfo\s*\(/i',
+        'fix' => 'Remove or gate phpinfo() behind auth.',
+    ],
+    [
+        'id' => 'INFO.002', 'severity' => 'medium',
+        'message' => 'Possible XXE: XML parsed with user input',
+        'pattern' => '/\b(?:simplexml_load_string|simplexml_load_file|DOMDocument->loadXML?|xml_parse)\s*\([^)]*\$/i',
+        'unless'  => '/libxml_disable_entity_loader|LIBXML_NOENT\s*[,)]*\s*0|libxml_set_external_entity_loader/i',
+        'fix' => 'Parse with LIBXML_NOENT off (default) and never trust external entities.',
+    ],
+    [
+        'id' => 'INFO.003', 'severity' => 'medium',
+        'message' => 'Possible HTTP header injection via user input',
+        'pattern' => '/\bheader\s*\(\s*[\'"]?[A-Za-z-]*:?[\'"]?\s*\.\s*\$_(?:GET|POST|REQUEST|COOKIE)/i',
+        'unless'  => '/str_replace|preg_replace|filter_var/i',
+        'fix' => 'Strip \\r\\n from user input before header().',
+    ],
+    [
+        'id' => 'INFO.004', 'severity' => 'low',
+        'message' => 'php_uname / $_SERVER[SERVER_SOFTWARE] disclosed (fingerprinting)',
+        'pattern' => '/\bphp_uname\s*\(|\$_SERVER\s*\[\s*[\'"]SERVER_SOFTWARE[\'"]\s*\]/i',
+        'fix' => 'Avoid advertising server software versions.',
+    ],
 ];
 
 // ---------------------------------------------------------------------------
@@ -271,11 +304,17 @@ function find_php_files(string $target): array {
     $it = new RecursiveIteratorIterator(
         new RecursiveDirectoryIterator($target, FilesystemIterator::SKIP_DOTS)
     );
+    $skipDirs = ['vendor', 'node_modules', '.git', '.svn', 'bower_components'];
     foreach ($it as $f) {
         if (!$f->isFile()) continue;
         $ext = strtolower($f->getExtension());
         if (in_array($ext, ['php', 'phtml', 'inc', 'php3', 'php4', 'php5', 'phps'], true)) {
-            $files[] = $f->getPathname();
+            $rel = str_replace(DIRECTORY_SEPARATOR, '/', $f->getPathname());
+            $skip = false;
+            foreach ($skipDirs as $d) { if (strpos($rel, "/$d/") !== false) { $skip = true; break; } }
+            if (!$skip) $files[] = $f->getPathname();
+        } elseif (preg_match('/\.(?:bak|old|orig|save|copy|dist)(?:\.|$)|~$/', $f->getFilename())) {
+            $files[] = $f->getPathname(); // backup of a source file = source disclosure
         }
     }
     sort($files);
@@ -303,6 +342,19 @@ foreach ($files as $file) {
     $filesScanned++;
     $bytesScanned += $size;
 
+    // Backup/source-disclosure file itself is a finding.
+    if (preg_match('/\.(?:bak|old|orig|save|copy|dist)(?:\.|$)|~$/i', $file)) {
+        $findings[] = [
+            'rule'     => 'INFO.005',
+            'severity' => 'medium',
+            'message'  => 'Backup file left in the tree — likely fetchable, leaks source',
+            'file'     => $file,
+            'line'     => 1,
+            'snippet'  => basename($file),
+            'fix'      => 'Delete editor/deploy backups; block *.bak etc. in the web server config.',
+        ];
+    }
+
     $lines = explode("\n", $code);
     foreach ($RULES as $rule) {
         // Find every match, with correct line numbers (multi-line safe).
@@ -310,6 +362,11 @@ foreach ($files as $file) {
         while (preg_match($rule['pattern'], $code, $m, PREG_OFFSET_CAPTURE, $offset)) {
             $matchStart = $m[0][1];
             $line = substr_count($code, "\n", 0, $matchStart) + 1;
+            // unless-guard: skip when the matched line (or its neighbors) already mitigates
+            if (!empty($rule['unless'])) {
+                $ctx = ($lines[$line - 2] ?? '') . "\n" . ($lines[$line - 1] ?? '') . "\n" . ($lines[$line] ?? '');
+                if (@preg_match($rule['unless'], $ctx)) { $offset = $matchStart + max(1, strlen($m[0][0])); continue; }
+            }
             $snippet = trim($lines[$line - 1] ?? '') ?: '(multi-line match)';
             if (mb_strlen($snippet) > 160) $snippet = mb_substr($snippet, 0, 157) . '...';
 
@@ -371,7 +428,16 @@ $sevColor = [
     'info'   => fn($s) => $C($s, '0;37'),
 ];
 
-echo $C('php-scanner', '1;36') . " — static security scan\n";
+$C = fn(string $s, string $hex) => $color ? "\x1b[{$hex}m{$s}\x1b[0m" : $s;
+
+echo "\n";
+echo $C('  ██████╗ ██╗  ██╗ ██████╗ ███████╗███╗   ██╗', '1;35') . "\n";
+echo $C('  ██╔══██╗██║  ██║██╔═══██╗██╔════╝████╗  ██║', '0;35') . "\n";
+echo $C('  ██████╔╝███████║██║   ██║█████╗  ██╔██╗ ██║', '1;95') . "\n";
+echo $C('  ██╔═══╝ ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║', '0;95') . "\n";
+echo $C('  ██║     ██║  ██║╚██████╔╝███████╗██║ ╚████║', '1;35') . "\n";
+echo $C('  ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝', '0;35') . "\n";
+echo $C('     ✦ GODMODE for small PHP sites ✦', '1;95') . "\n\n";
 echo "Target:  $target\n";
 echo "Scanned: $filesScanned file(s), " . number_format($bytesScanned) . " bytes in "
      . round($elapsed, 2) . "s"

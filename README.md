@@ -1,10 +1,16 @@
-# php-scanner
+<div align="center">
 
-Find and **prove** vulnerabilities in small PHP websites — with AI agents doing the exploiting.
+# ⚡ php-scanner
 
-```
-scan → static rules → AI triage (Claude) → live pentest (Claude + Codex)
-```
+### ✦ GODMODE for small PHP websites ✦
+
+**find the bugs → let Claude + Codex prove them live**
+
+`scan → static rules → AI triage → multi-agent live pentest`
+
+</div>
+
+---
 
 Three stages, one pipeline, zero tokens burned in your coding session:
 
@@ -29,7 +35,15 @@ php scanner.php /var/www/mysite
 
 # JSON output + severity floor
 php scanner.php /var/www/mysite --json --min-severity=medium
+```
 
+**Running it from Claude Code or Codex?** This repo ships with pre-loaded agent prompts:
+- Claude Code: `/scan <path>` and `/pentest <path> <url>` slash commands (`.claude/commands/`) + `CLAUDE.md`
+- Codex: `AGENTS.md` is auto-read, and copy-paste prompts live in [`prompts/`](prompts/README.md)
+
+Just open the repo in your agent and say "scan this site".
+
+```bash
 # 2. AI triage of findings
 php scanner.php /var/www/mysite --json | node triage.cjs
 

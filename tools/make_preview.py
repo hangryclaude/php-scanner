@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compose the php-scanner GitHub social preview (1280x640, Pliny purple godmode theme)."""
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
+import os
 import random
 
 W, H = 1280, 640
@@ -106,5 +107,6 @@ for part, font, col in [
     rd2.text((vx, 337), part, font=font, fill=col)
     vx += rd2.textlength(part, font=font)
 
-img.save("gh_og_share_image.png", optimize=True)
-print("saved", img.size)
+out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gh_og_share_image.png")
+img.save(out, optimize=True)
+print("saved", img.size, "->", out)

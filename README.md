@@ -15,7 +15,7 @@
 Three stages, one pipeline, zero tokens burned in your coding session:
 
 1. **`scanner.php`** — dependency-free PHP static analyzer. ~30 rules covering the bugs that actually pop small sites: SQLi, XSS, command injection, LFI/RFI, deserialization, open redirect, mail header injection, weak crypto, hardcoded creds, debug leftovers.
-2. **`triage.cjs`** — sends raw findings to a side AI (Claude via flat Max plan, `$0` marginal) to kill false positives and rank real, exploitable bugs.
+2. **`triage.cjs`** — sends raw findings to a side AI (local Ollama stack if you have one, otherwise the `claude` CLI) to kill false positives and rank real, exploitable bugs.
 3. **`pentest.cjs`** — dispatches the confirmed bugs to multiple agents (Claude + Codex CLI) that run harmless curl proofs against the **live** URL and report CONFIRMED / UNCONFIRMED with evidence.
 
 ## Install
@@ -102,3 +102,7 @@ Agents are instructed to use harmless echo/alert-style payloads only — no dele
 ## Legal
 
 Only scan and pentest sites you own or are authorized to test.
+
+## License
+
+[MIT](LICENSE) — © 2026 hangryclaude

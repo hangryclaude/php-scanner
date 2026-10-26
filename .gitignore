@@ -3,3 +3,4 @@ node_modules/
 .DS_Store
 *.log
 testsite/config.php.bak
+__pycache__/

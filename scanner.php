@@ -260,6 +260,38 @@ $RULES = [
     ],
 ];
 
+// PHP2Shell (CVE-2026-109618 / CVE-2026-109619): unauthenticated RCE in PHP itself.
+// Patched branches => minimum SAFE version. Anything older (or EOL 7.x/8.0/8.1
+// without the source backport) is vulnerable to in-the-wild exploitation.
+const PHP2SHELL_SAFE = ['8.2' => '8.2.35', '8.3' => '8.3.36', '8.4' => '8.4.27', '8.5' => '8.5.12'];
+const PHP2SHELL_MSG = 'PHP2Shell RCE (CVE-2026-109618/109619): PHP %s is UNPATCHED — actively exploited in the wild via session.upload_progress multipart requests';
+
+function php2shell_check(?string $version): ?array {
+    if (!$version || !preg_match('/^(\d+)\.(\d+)(?:\.(\d+))?/', trim($version), $m)) return null;
+    $major = (int)$m[1]; $minorS = $m[1] . '.' . $m[2];
+    $patch = (int)($m[3] ?? 0);
+    if ($major < 8 || in_array($minorS, ['8.0', '8.1'], true)) {
+        // EOL branches: only rare minimal source backports exist — assume vulnerable.
+        return [
+            'rule' => 'PHP2SHELL.001', 'severity' => 'high',
+            'message' => sprintf(PHP2SHELL_MSG, $version . ' (EOL branch)'),
+            'file' => '(runtime PHP version)', 'line' => 0,
+            'snippet' => "PHP $version — EOL branch, no official patched release",
+            'fix' => 'Move to a supported branch with the PHP2Shell fix (8.2.35+/8.3.36+/8.4.27+/8.5.12+).',
+        ];
+    }
+    if (!isset(PHP2SHELL_SAFE[$minorS])) return null; // unknown/future branch: assume patched
+    $safe = (int)substr(PHP2SHELL_SAFE[$minorS], strrpos(PHP2SHELL_SAFE[$minorS], '.') + 1);
+    if ($patch >= $safe) return null;
+    return [
+        'rule' => 'PHP2SHELL.001', 'severity' => 'high',
+        'message' => sprintf(PHP2SHELL_MSG, $version . " < " . PHP2SHELL_SAFE[$minorS]),
+        'file' => '(runtime PHP version)', 'line' => 0,
+        'snippet' => "PHP $version — patch to " . PHP2SHELL_SAFE[$minorS] . '+ or latest',
+        'fix' => 'Update PHP to ' . PHP2SHELL_SAFE[$minorS] . ' or newer. CVE-2026-109618/109619 are exploited unauthenticated, no app-code bug required.',
+    ];
+}
+
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
@@ -274,11 +306,13 @@ array_shift($args);
 $target = null;
 $json = false;
 $minSeverity = 'info';
+$phpVersion = null;
 $color = function_exists('posix_isatty') ? posix_isatty(STDOUT) : true;
 
 foreach ($args as $a) {
     if ($a === '--json') { $json = true; }
     elseif ($a === '--no-color') { $color = false; }
+    elseif (preg_match('/^--php-version=(.+)$/', $a, $m)) { $phpVersion = $m[1]; }
     elseif (preg_match('/^--min-severity=(.+)$/', $a, $m)) {
         $m[1] = strtolower(trim($m[1]));
         if (!isset(SEVERITIES[$m[1]])) usage_and_exit();
@@ -331,6 +365,26 @@ $filesScanned = 0;
 $bytesScanned = 0;
 $skipped = 0;
 $startTime = microtime(true);
+
+// --- PHP2Shell (CVE-2026-109618/109619) runtime-version check -------------
+// Priority: --php-version flag > live hints found in the tree.
+$declaredVersion = $phpVersion ?? null;           // from --php-version=
+if ($declaredVersion === null && is_dir($target)) {
+    // composer.json platform/require, Dockerfile FROM php:x.y, .php-version, .tool-versions
+    foreach ([
+        ['composer.json', '/"php"\s*:\s*"[\^~>=< ]*(\d+\.\d+(?:\.\d+)?)/'],
+        ['Dockerfile', '/FROM\s+php:(\d+\.\d+(?:\.\d+)?)/i'],
+        ['.php-version', '/^\s*(\d+\.\d+(?:\.\d+)?)\s*$/m'],
+        ['.tool-versions', '/^php\s+(\d+\.\d+(?:\.\d+)?)/m'],
+    ] as [$hintFile, $hintRe]) {
+        $p = rtrim($target, '/') . '/' . $hintFile;
+        if (is_file($p)) {
+            $c = @file_get_contents($p);
+            if ($c && preg_match($hintRe, $c, $hm)) { $declaredVersion = $hm[1]; break; }
+        }
+    }
+}
+if ($f = php2shell_check($declaredVersion)) $findings[] = $f;
 
 foreach ($files as $file) {
     $size = filesize($file);
@@ -429,8 +483,6 @@ $sevColor = [
 ];
 
 $C = fn(string $s, string $hex) => $color ? "\x1b[{$hex}m{$s}\x1b[0m" : $s;
-
-echo "\n";
 echo $C('  ██████╗ ██╗  ██╗ ██████╗ ███████╗███╗   ██╗', '1;35') . "\n";
 echo $C('  ██╔══██╗██║  ██║██╔═══██╗██╔════╝████╗  ██║', '0;35') . "\n";
 echo $C('  ██████╔╝███████║██║   ██║█████╗  ██╔██╗ ██║', '1;95') . "\n";

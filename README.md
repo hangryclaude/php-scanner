@@ -83,6 +83,14 @@ php scanner.php testsite --json | node pentest.cjs http://127.0.0.1:8899
 
 Each finding ships with a fix hint. Rules are plain regex entries at the top of `scanner.php` — add your own in seconds.
 
+### The big one: PHP2Shell (CVE-2026-109618 / CVE-2026-109619)
+
+Unauthenticated RCE in **PHP itself** (CVSS 9.2), exploited in the wild since Oct 21 2026 via `session.upload_progress` multipart requests — no app-code bug needed. The scanner flags **unpatched runtimes** three ways:
+
+- `--php-version=8.4.26` — check a known version
+- repo hints — `composer.json`, `Dockerfile FROM php:x.y`, `.php-version`, `.tool-versions`
+- live sniff — `pentest.cjs` reads the site's `X-Powered-By` header and adds the finding only when the runtime is **older than the patched releases** (8.2.35 / 8.3.36 / 8.4.27 / 8.5.12); patched sites are explicitly skipped so you find the sites where *the bug is still there*.
+
 ## Pentest safety
 
 Agents are instructed to use harmless echo/alert-style payloads only — no deletion, no defacement, no destructive SQL. Each agent's full report is saved to `$TMPDIR/pentest/<agent>-report.md`.

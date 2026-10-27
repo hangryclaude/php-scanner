@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compose the php-scanner GitHub social preview (1280x640, Pliny purple godmode theme)."""
+"""Compose the php-scanner GitHub social preview (1280x640, purple neon theme)."""
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 import os
 import random

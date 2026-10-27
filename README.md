@@ -2,11 +2,11 @@
 
 # ⚡ php-scanner
 
-### ✦ GODMODE for small PHP websites ✦
-
-**find the bugs → let Claude + Codex prove them live**
+### find the bugs → let Claude + Codex prove them live
 
 `scan → static rules → AI triage → multi-agent live pentest`
+
+<img src="gh_og_share_image.png" alt="php-scanner — terminal scan report with flagged vulnerable lines" width="832">
 
 </div>
 

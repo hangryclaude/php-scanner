@@ -489,7 +489,7 @@ echo $C('  ██████╔╝███████║██║   ██║
 echo $C('  ██╔═══╝ ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║', '0;95') . "\n";
 echo $C('  ██║     ██║  ██║╚██████╔╝███████╗██║ ╚████║', '1;35') . "\n";
 echo $C('  ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝', '0;35') . "\n";
-echo $C('     ✦ GODMODE for small PHP sites ✦', '1;95') . "\n\n";
+echo $C('     static security scanner for small PHP sites', '0;95') . "\n\n";
 echo "Target:  $target\n";
 echo "Scanned: $filesScanned file(s), " . number_format($bytesScanned) . " bytes in "
      . round($elapsed, 2) . "s"

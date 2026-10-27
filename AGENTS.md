@@ -28,5 +28,5 @@ This repo is a PHP vulnerability pipeline. When the user asks to "scan", "find v
 
 - The static stage needs only `php` (8+).
 - Triage and pentest need `node` plus the `claude` and/or `codex` CLI signed in.
-- Pentest reports land in the OS temp dir under `pentest/<agent>-report.md`.
+- Pentest reports land under `php-scanner/pentest/` in the OS temp dir (`<agent>-report.md`).
 - If a user gives a git URL, clone it to a temp dir and scan that.

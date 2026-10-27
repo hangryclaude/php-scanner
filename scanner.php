@@ -35,7 +35,7 @@ $RULES = [
     [
         'id' => 'SQLI.002', 'severity' => 'high',
         'message' => 'Possible SQL injection: query built by string concatenation',
-        'pattern' => '/\b\$ (?:sql|query|q)\b.*?(?:\.\s*\$_(?:GET|POST|REQUEST|COOKIE)|["\']\s*\.\s*\$_(?:GET|POST|REQUEST|COOKIE))/ix',
+        'pattern' => '/\$(?:sql|query|q)\b.*?(?:\.\s*\$_(?:GET|POST|REQUEST|COOKIE)|["\']\s*\.\s*\$_(?:GET|POST|REQUEST|COOKIE))/ix',
         'fix' => 'Bind user input instead of concatenating it into the query.',
     ],
     [
@@ -482,7 +482,6 @@ $sevColor = [
     'info'   => fn($s) => $C($s, '0;37'),
 ];
 
-$C = fn(string $s, string $hex) => $color ? "\x1b[{$hex}m{$s}\x1b[0m" : $s;
 echo $C('  ██████╗ ██╗  ██╗ ██████╗ ███████╗███╗   ██╗', '1;35') . "\n";
 echo $C('  ██╔══██╗██║  ██║██╔═══██╗██╔════╝████╗  ██║', '0;35') . "\n";
 echo $C('  ██████╔╝███████║██║   ██║█████╗  ██╔██╗ ██║', '1;95') . "\n";

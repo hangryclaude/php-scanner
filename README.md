@@ -80,6 +80,7 @@ php scanner.php testsite --json | node pentest.cjs http://127.0.0.1:8899
 | Redirect / mail | REDIR.001, MAIL.001 | open redirect, header injection |
 | Crypto / logic | CRYPTO.001–002, AUTH.001, LOGIC.001 | md5/sha1, mt_rand, loose secret compare, `=` in if |
 | Config / debug | DEBUG.001–002, MISC.001–003, SSRF.001 | var_dump, display_errors, extract, preg /e, $_REQUEST, SSRF |
+| Info disclosure | INFO.001–005 | phpinfo(), XXE, header injection, version disclosure, backup files (`*.bak`) |
 
 Each finding ships with a fix hint. Rules are plain regex entries at the top of `scanner.php` — add your own in seconds.
 

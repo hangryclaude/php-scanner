@@ -6,7 +6,7 @@
 
 `scan → static rules → AI triage → multi-agent live pentest`
 
-<img src="gh_og_share_image.png" alt="php-scanner — terminal scan report with flagged vulnerable lines" width="832">
+<img src="docs/banner.png" alt="php-scanner — cyber radar dashboard" width="832">
 
 </div>
 

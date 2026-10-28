@@ -53,7 +53,13 @@ php scanner.php /var/www/mysite --json | node pentest.cjs http://127.0.0.1:8899
 
 # Single agent only
 php scanner.php /var/www/mysite --json | node pentest.cjs http://127.0.0.1:8899 --agents=claude
+
+# Claude CLI pointed at a proxy / local model? Pin a model id it accepts.
+PENTEST_CLAUDE_MODEL=claude-sonnet-4-6 ... node pentest.cjs http://127.0.0.1:8899
 ```
+
+If the pinned model is rejected as unknown, `pentest.cjs` retries with the CLI's
+own default rather than failing the run.
 
 Or everything local: `./scan.sh /var/www/mysite`.
 

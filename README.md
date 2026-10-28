@@ -63,6 +63,33 @@ own default rather than failing the run.
 
 Or everything local: `./scan.sh /var/www/mysite`.
 
+## Live mode: no source, just a URL
+
+The static rules need a filesystem path. When all you have is a URL, the pipeline
+runs *probe → pentest* instead of *scan → triage → pentest*:
+
+```bash
+# deterministic, zero-token recon: reflection, SQL errors, traversal, redirect
+node probe.cjs https://example.com/product.php?id=1
+
+# harvest ~100 live PHP URLs (urlscan.io public search, no API key) and verify each
+node discover.cjs --count=100 --out=targets.jsonl
+
+# run the whole thing over the list, resumable via ledger.jsonl
+node run-all.cjs --agents=claude,codex,grok
+```
+
+`probe.cjs` only produces **candidates** — a raw reflection, a database error, a
+`/etc/passwd` read, an attacker-controlled `Location`. The agents in `pentest.cjs`
+still have to reproduce each one with their own curl before it counts as confirmed.
+`run-all.cjs` writes `ledger.jsonl` (one record per site) and `reports/*.md`, so a
+crash or ctrl-c resumes where it stopped; pass `--recheck` to redo a site.
+
+Probes are deliberately gentle: one request per hypothesis, 350ms apart, GET/POST
+only, no auth bypass, no destructive payloads, UA identifies the tool. Use it
+against sites you're allowed to poke.
+
+
 ## Try it on the sample site
 
 ```

@@ -4,3 +4,10 @@ node_modules/
 *.log
 testsite/config.php.bak
 __pycache__/
+
+# live-mode run artifacts (targets, per-site bodies, ledger, agent reports)
+targets/
+targets.jsonl
+targets.raw.jsonl
+ledger.jsonl
+reports/

@@ -83,9 +83,13 @@ const SQL_ERRORS = [
   /pg_query\(\)|postgresql.*error/i, /sqlite_?error|unrecognized token/i,
   /ORA-\d{4,5}/, /SQLSTATE\[/, /syntax error at or near/i, /quoted string not properly terminated/i,
 ];
-const looksEscaped = (body, marker) =>
-  body.includes('&lt;') && new RegExp(`&lt;\\s*script[^>]*&gt;\\s*${marker}`).test(body);
-
+// A tag echoed between < and > is attribute text, not markup: browsers never
+// execute it, so a bare substring match there is not an XSS.
+const insideTag = (body, at) => {
+  const open = body.lastIndexOf('<', at - 1);
+  const close = body.lastIndexOf('>', at - 1);
+  return open > close;
+};
 (async () => {
   const findings = [];
   const notes = [];
@@ -107,18 +111,18 @@ const looksEscaped = (body, marker) =>
     const marker = 'pscn' + Math.random().toString(36).slice(2, 8);
     const target = new URL(REQ);
     // ---- reflection / XSS ------------------------------------------------
-    // Three contexts, because "<script>" alone misses the common case: a site that
-    // escapes < and > but not the quote it is sitting next to inside an attribute
-    // (og:url, value="...", href="..."). That is a real breakout, and the raw-
-    // payload check called it "just a reflection".
-    const mark = () => 'pscn' + Math.random().toString(36).slice(2, 8);
-    const mk = mark();
+    // Three contexts. "<script>" alone is a liar: a site that echoes the value
+    // raw inside content="..." puts the tag in the page source without ever
+    // breaking out of the attribute, so the tag checks run FIRST (a quote that
+    // escapes is unambiguous) and the plain-HTML check only counts when the
+    // match actually sits outside a tag.
+    const mk = 'pscn' + Math.random().toString(36).slice(2, 8);
     const payloads = [
-      { kind: 'html', payload: `<script>${mk}</script>`, prove: (b) => b.includes(`<script>${mk}</script>`) },
       // no spaces in the tag: a literal space is illegal in a raw URL, and these
-      // payloads have to travel UNENCODED to reach the sites that re-encode input.
+      // payloads have to travel UNENCODED to reach apps that re-encode input.
       { kind: 'attr-dq', payload: `"><svg/onload=${mk}>`, prove: (b) => b.includes(`"><svg/onload=${mk}>`) },
       { kind: 'attr-sq', payload: `'><svg/onload=${mk}>`, prove: (b) => b.includes(`'><svg/onload=${mk}>`) },
+      { kind: 'html', payload: `<script>${mk}</script>`, prove: (b, at) => !insideTag(b, at) },
     ];
 
     const send = async (payload) => {
@@ -133,7 +137,7 @@ const looksEscaped = (body, marker) =>
       const qs = entries
         .map(([k, v]) => `${encodeURIComponent(k)}=${k === p.name ? payload : encodeURIComponent(v)}`)
         .join('&');
-      return http(`${t.origin}${t.pathname}?${qs}`);
+      return http(`${t.origin}${t.pathname}?${qs}`).then((r) => ({ ...r, reqUrl: `${t.origin}${t.pathname}?${qs}` }));
     };
 
     let rawHit = null;
@@ -141,24 +145,33 @@ const looksEscaped = (body, marker) =>
     for (const shape of payloads) {
       const res = await send(shape.payload);
       await sleep(DELAY_MS);
-      if (shape.prove(res.body || '')) { rawHit = shape; break; }
-      if ((res.body || '').includes(mk)) shadow = true;
+      const body = res.body || '';
+      const at = body.indexOf(shape.payload);
+      if (at >= 0 && shape.prove(body, at)) {
+        rawHit = { shape, at, body, url: res.reqUrl || res.finalUrl };
+        break;
+      }
+      if (body.includes(mk)) shadow = true;
     }
 
     if (rawHit) {
-      const where = rawHit.kind === 'html' ? 'HTML body' : rawHit.kind === 'attr-dq'
-        ? 'double-quoted attribute (quote not escaped)' : 'single-quoted attribute (quote not escaped)';
+      const { shape, at, body, url } = rawHit;
+      const where = shape.kind === 'html' ? 'the HTML body'
+        : shape.kind === 'attr-dq' ? 'a double-quoted attribute (the quote is not escaped)'
+        : 'a single-quoted attribute (the quote is not escaped)';
+      // Evidence the agent (and the adjudicator) can check without re-firing anything.
+      const excerpt = body.slice(Math.max(0, at - 90), at + shape.payload.length + 60).replace(/\s+/g, ' ');
       findings.push({
         rule: 'XSS.LIVE', severity: 'high', line: 0, file: `${new URL(REQ).origin}${new URL(REQ).pathname}`,
         message: `Reflected XSS: ${p.method} parameter "${p.name}" (${p.source}) breaks out of ${where}`,
-        snippet: `curl -s '${new URL(REQ).origin}${new URL(REQ).pathname}?${p.name}=${encodeURIComponent(rawHit.payload)}'  ->  payload intact in the response`,
+        snippet: `curl -s '${url}'  ->  ${excerpt}`,
         fix: 'Escape on output with htmlspecialchars($x, ENT_QUOTES, "UTF-8") — ENT_QUOTES matters, the default flags leave the quote live.',
       });
     } else if (shadow) {
       findings.push({
         rule: 'XSS.LIVE', severity: 'medium', line: 0, file: `${new URL(REQ).origin}${new URL(REQ).pathname}`,
-        message: `Input reflection: ${p.method} parameter "${p.name}" echoes its value back (tags are encoded, no breakout found)`,
-        snippet: `marker appears in the response but <script>, "><svg and '><svg all come back encoded`,
+        message: `Input reflection: ${p.method} parameter "${p.name}" echoes its value back (tags encoded or still inside an attribute, no breakout found)`,
+        snippet: `marker appears in the response but neither quote escaped and no tag landed outside one`,
         fix: 'Encoded reflection is usually safe in HTML context; check for JS/URL contexts where encoding differs.',
       });
     }
@@ -227,19 +240,25 @@ const looksEscaped = (body, marker) =>
 
   // One sink echoing 12 parameters is ONE bug, not twelve — cap per rule and say
   // how many were folded in, otherwise the agent report is unreadable noise.
-  const seen = {};
+  const perRule = {};
+  for (const f of findings) perRule[f.rule] = (perRule[f.rule] || 0) + 1;
+  const kept = {};
   const capped = [];
   for (const f of findings) {
-    seen[f.rule] = (seen[f.rule] || 0) + 1;
-    if (seen[f.rule] <= 3) capped.push(f);
-    else capped[capped.length - 1].message += ` (+${seen[f.rule] - 3} more parameter(s) reflect identically)`;
+    kept[f.rule] = (kept[f.rule] || 0) + 1;
+    if (kept[f.rule] <= 3) capped.push(f);
+  }
+  const lastOf = {};
+  for (const f of capped) lastOf[f.rule] = f;
+  for (const [rule, n] of Object.entries(perRule)) {
+    if (n > 3 && lastOf[rule]) lastOf[rule].message += ` (+${n - 3} more parameter(s) behave identically)`;
   }
   const out = { url: REQ, finalUrl: base.finalUrl, probedAt: new Date().toISOString(), notes, findings: capped };
   if (outFile) fs.writeFileSync(outFile, JSON.stringify(out, null, 2));
   if (asJson || outFile) console.log(JSON.stringify(out, null, 2));
   else {
     console.log(`${out.url}\n  ${notes.join('\n  ')}`);
-    for (const f of findings) console.log(`  ${f.severity.toUpperCase().padEnd(6)} ${f.rule} — ${f.message}`);
-    if (!findings.length) console.log('  (no live candidates)');
+    for (const f of capped) console.log(`  ${f.severity.toUpperCase().padEnd(6)} ${f.rule} — ${f.message}`);
+    if (!capped.length) console.log('  (no live candidates)');
   }
 })();

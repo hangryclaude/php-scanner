@@ -29,7 +29,7 @@ $RULES = [
         'id' => 'SQLI.001', 'severity' => 'high',
         'message' => 'Possible SQL injection: variable interpolated into a query',
         'pattern' => '/\b(?:mysql_query|mysqli_query|mysqli::query|mysqli_real_query|->query|->exec)\s*\(\s*["\'][^"\']*(?:SELECT|INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|TRUNCATE)\b[^"\']*\$[^"\']*/i',
-        'unless'  => '/(?:prepare|bind_param|bindValue|bindParam|execute)\s*\(|quoteString|quoteName|real_escape_string|\bescape_string\b|PDO::quote|\$wpdb->(?:posts|postmeta|users|usermeta|options|terms|term_taxonomy|term_relationships|termmeta|comments|commentmeta|links|blogs|blogmeta|site|sitemeta|signups|registration_log|sitecategories)\b/i',
+        'unless'  => '/(?:prepare|bind_param|bindValue|bindParam|execute)\s*\(|quoteString|quoteName|real_escape_string|\bescape_string\b|PDO::quote|\$wpdb->(?:prefix|posts|postmeta|users|usermeta|options|terms|term_taxonomy|term_relationships|termmeta|comments|commentmeta|links|blogs|blogmeta|site|sitemeta|signups|registration_log|sitecategories)\b/i',
         'fix' => 'Use prepared statements (PDO::prepare / mysqli_prepare) and bind parameters.',
     ],
     [
@@ -293,12 +293,17 @@ function backtick_shell_lines(string $code): array {
     $out = [];
     $open = false; $tainted = false; $start = 0; $line = 1;
     foreach (token_get_all($code) as $t) {
-        $text = is_array($t) ? $t[1] : $t;
-        if ($text === '`') {
-            if (!$open) { $open = true; $tainted = false; $start = $line; }
-            else { if ($tainted) $out[] = $start; $open = false; }
-        } elseif ($open && is_array($t) && $t[0] === T_VARIABLE) {
-            $tainted = true;
+        if (is_array($t)) {
+            $text = $t[1];
+            if ($open && $t[0] === T_VARIABLE) $tainted = true;
+        } else {
+            $text = $t;
+            // Only a bare '`' character token is the shell operator; a backtick
+            // inside a double-quoted string is T_ENCAPSED_AND_WHITESPACE.
+            if ($t === '`') {
+                if (!$open) { $open = true; $tainted = false; $start = $line; }
+                else { if ($tainted) $out[] = $start; $open = false; }
+            }
         }
         $line += substr_count($text, "\n");
     }

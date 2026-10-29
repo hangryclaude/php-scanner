@@ -20,6 +20,8 @@ const outFile = (argv.find((a) => a.startsWith('--out=')) || '').split('=')[1];
 const asJson = argv.includes('--json');
 const MAX_PARAMS = 12;
 const DELAY_MS = 350;
+// A slow host x 12 params x 6 hypotheses never finishes; cap the whole probe.
+const BUDGET_MS = parseInt((argv.find((a) => a.startsWith('--budget=')) || '').split('=')[1] || '150', 10) * 1000;
 
 if (!url) { console.error('Usage: node probe.cjs <url> [--json] [--out=file]'); process.exit(2); }
 
@@ -30,7 +32,7 @@ function http(u, { method = 'GET', data = null, follow = true } = {}) {
   const bodyFile = `${require('os').tmpdir()}/pscn-${id}.body`;
   const headFile = `${require('os').tmpdir()}/pscn-${id}.head`;
   return new Promise((res) => {
-    const args = ['-sS', '-m', '15', '-A', UA, '-D', headFile, '-o', bodyFile,
+    const args = ['-sS', '-m', '10', '-A', UA, '-D', headFile, '-o', bodyFile,
       '-w', '%{http_code} %{url_effective} %{size_download}'];
     if (follow) args.push('-L', '--max-redirs', '3');
     if (method === 'POST') { args.push('-X', 'POST', '--data', data || ''); }
@@ -100,10 +102,13 @@ const insideTag = (body, at) => {
   const baseBody = base.body || '';
   const baseLen = baseBody.length;
   const params = parseParams(REQ, baseBody);
+  const deadline = Date.now() + BUDGET_MS;
   notes.push(`status=${base.status} bytes=${baseLen} params=${params.length}`);
 
   if (base.status === 0) {
-    console.log(JSON.stringify({ url, findings, notes: [...notes, 'unreachable'] }, null, 2));
+    const dead = { url, probedAt: new Date().toISOString(), notes: [...notes, 'unreachable'], findings: [] };
+    if (outFile) fs.writeFileSync(outFile, JSON.stringify(dead, null, 2));
+    console.log(JSON.stringify(dead, null, 2));
     process.exit(0);
   }
 
@@ -143,6 +148,7 @@ const insideTag = (body, at) => {
     let rawHit = null;
     let shadow = false;
     for (const shape of payloads) {
+        if (Date.now() > deadline) break;
       const res = await send(shape.payload);
       await sleep(DELAY_MS);
       const body = res.body || '';
@@ -177,6 +183,7 @@ const insideTag = (body, at) => {
     }
 
     // ---- error-based SQLi ------------------------------------------------
+    if (Date.now() > deadline) break;
     const quote = p.name + "'\"";
     let inj;
     if (p.method === 'POST') {
@@ -198,6 +205,7 @@ const insideTag = (body, at) => {
     }
 
     // ---- LFI / source disclosure ----------------------------------------
+    if (Date.now() > deadline) break;
     if (/file|page|path|include|view|tpl|template|lang|doc|dir|load|read|src/i.test(p.name)) {
       const lfiMarkers = [
         { payload: '../../../../../../etc/passwd', rule: 'FILE.LIVE', evidence: /root:.*:0:0:/ },
@@ -221,6 +229,7 @@ const insideTag = (body, at) => {
     }
 
     // ---- open redirect ---------------------------------------------------
+    if (Date.now() > deadline) break;
     if (/url|uri|redir|redirect|return|returnto|next|goto|dest|destination|continue|back|target|forward/i.test(p.name)) {
       const t4 = new URL(REQ);
       t4.searchParams.set(p.name, 'https://example.org/pscn-redirect');

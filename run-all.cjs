@@ -72,7 +72,7 @@ const counts = (report) => {
   const todo = LIMIT > 0 ? targets.slice(0, LIMIT) : targets;
   console.error(`\n${todo.length} targets to run (${done.size} already done)\n`);
 
-  const summary = { done: 0, clean: 0, failed: 0, confirmed: 0, unconfirmed: 0 };
+  const summary = { done: 0, clean: 0, failed: 0, dead: 0, confirmed: 0, unconfirmed: 0 };
   for (const [i, t] of todo.entries()) {
     const slug = t.apex.replace(/[^a-z0-9.-]/gi, '_');
     const findingsFile = path.join(REPORTS, `${slug}.findings.json`);
@@ -85,14 +85,25 @@ const counts = (report) => {
     // ---- 1. probe (free, deterministic) -----------------------------------
     let probe;
     try {
-      probe = await runNode('probe.cjs', [t.url, '--json', `--out=${findingsFile}`], { timeoutMin: 10 });
+      fs.rmSync(findingsFile, { force: true });
+      probe = await runNode('probe.cjs', [t.url, '--json', `--out=${findingsFile}`, '--budget=150'], { timeoutMin: 6 });
       const data = JSON.parse(fs.readFileSync(findingsFile, 'utf8'));
       rec.findings = (data.findings || []).length;
       rec.notes = data.notes || [];
+      if ((data.notes || []).includes('unreachable')) {
+        // Dead / blocking host: not a finding, not a bug in the pipeline. Keep it
+        // out of the "failed" bucket so a rerun can pick it up later.
+        rec.status = 'unreachable';
+        rec.verdict = 'dead';
+        process.stderr.write(`unreachable\n`);
+        fs.appendFileSync(LEDGER, JSON.stringify(rec) + '\n');
+        summary.dead = (summary.dead || 0) + 1;
+        continue;
+      }
     } catch (e) {
       rec.status = 'failed';
       rec.error = 'probe: ' + e.message;
-      process.stderr.write(`probe failed\n`);
+      process.stderr.write(`probe failed (${e.message.slice(0, 80)})\n`);
       fs.appendFileSync(LEDGER, JSON.stringify(rec) + '\n');
       summary.failed++;
       continue;
@@ -141,6 +152,6 @@ const counts = (report) => {
     process.stderr.write(`→ ${rec.verdict} (${per || 'no agent output'})\n`);
   }
 
-  console.error(`\ndone ${summary.done} (clean ${summary.clean}, failed ${summary.failed}) · ` +
+  console.error(`\ndone ${summary.done} (clean ${summary.clean}, unreachable ${summary.dead}, failed ${summary.failed}) · ` +
     `confirmed ${summary.confirmed} · unconfirmed ${summary.unconfirmed}\nledger: ${LEDGER}\n`);
 })();

@@ -28,8 +28,8 @@ $RULES = [
     [
         'id' => 'SQLI.001', 'severity' => 'high',
         'message' => 'Possible SQL injection: variable interpolated into a query',
-        'pattern' => '/\b(?:mysql_query|mysqli_query|mysqli::query|mysqli_real_query|->query|->exec|->prepare)\s*\(\s*["\'](?:[^"\']*\{?\$|[^"\']*\.)/i',
-        'unless'  => '/(?:prepare|bind_param|bindValue|bindParam|execute)\s*\(/i',
+        'pattern' => '/\b(?:mysql_query|mysqli_query|mysqli::query|mysqli_real_query|->query|->exec)\s*\(\s*["\'][^"\']*(?:SELECT|INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|TRUNCATE)\b[^"\']*\$[^"\']*/i',
+        'unless'  => '/(?:prepare|bind_param|bindValue|bindParam|execute)\s*\(|quoteString|quoteName|real_escape_string|\bescape_string\b|PDO::quote|\$wpdb->(?:posts|postmeta|users|usermeta|options|terms|term_taxonomy|term_relationships|termmeta|comments|commentmeta|links|blogs|blogmeta|site|sitemeta|signups|registration_log|sitecategories)\b/i',
         'fix' => 'Use prepared statements (PDO::prepare / mysqli_prepare) and bind parameters.',
     ],
     [
@@ -41,7 +41,7 @@ $RULES = [
     [
         'id' => 'SQLI.003', 'severity' => 'medium',
         'message' => 'Raw user input used inside a query string',
-        'pattern' => '/["\'][^"\']*\b(?:SELECT|INSERT|UPDATE|DELETE|WHERE)\b[^"\']*["\']?\s*\.\s*\$(?:_GET|_POST|_REQUEST|_COOKIE)\s*\[/i',
+        'pattern' => '/["\'][^"\']*\b(?:SELECT|INSERT|UPDATE|DELETE|WHERE)\s+[^"\']*["\']?\s*\.\s*\$(?:_GET|_POST|_REQUEST|_COOKIE)\s*\[/i',
         'fix' => 'Escape with the right *_real_escape_string() or, better, use bound parameters.',
     ],
 
@@ -79,8 +79,7 @@ $RULES = [
     [
         'id' => 'CMD.002', 'severity' => 'high',
         'message' => 'Backtick shell execution with interpolation',
-        'pattern' => '/`[^`]*\$/',
-        'fix' => 'Backticks interpolate variables — validate input or use escapeshellarg().',
+        'token'   => 'backtick',        'fix' => 'Backticks interpolate variables — validate input or use escapeshellarg().',
     ],
     [
         'id' => 'CMD.003', 'severity' => 'medium',
@@ -93,7 +92,7 @@ $RULES = [
     [
         'id' => 'FILE.001', 'severity' => 'high',
         'message' => 'Possible remote/local file inclusion from user input',
-        'pattern' => '/\b(?:include|include_once|require|require_once)\s*\(?\s*["\'][^"\']*["\']?\s*\.\s*\$|,\s*\$_(?:GET|POST|REQUEST)/i',
+        'pattern' => '/\b(?:include|include_once|require|require_once)\s*\(?\s*(?:["\'][^"\']*["\']\s*\.\s*\$[a-z_]|[^;\n]{0,80}?\.\s*\$(?:_GET|POST|REQUEST|COOKIE))/i',
         'fix' => 'Whitelist allowed pages/values; never include a path built from user input.',
     ],
     [
@@ -127,7 +126,7 @@ $RULES = [
     [
         'id' => 'CRED.001', 'severity' => 'high',
         'message' => 'Hardcoded database password',
-        'pattern' => '/(?:mysqli?_connect|new\s+(?:PDO|mysqli)|DB_PASS(?:WORD)?\s*=)\s*\(?\s*["\'][^"\']{4,}["\']/i',
+        'pattern' => '/(?:\bmysqli?_connect\s*\(\s*["\'][^"\']{4,}["\']|\bnew\s+(?:PDO|mysqli)\s*\(\s*["\'][^"\']*["\']|\bDB_PASS(?:WORD)?\s*=\s*["\'][^"\']{4,}["\'])/i',
         'fix' => 'Move credentials out of source control into environment variables.',
     ],
     [
@@ -265,6 +264,46 @@ $RULES = [
 // without the source backport) is vulnerable to in-the-wild exploitation.
 const PHP2SHELL_SAFE = ['8.2' => '8.2.35', '8.3' => '8.3.36', '8.4' => '8.4.27', '8.5' => '8.5.12'];
 const PHP2SHELL_MSG = 'PHP2Shell RCE (CVE-2026-109618/109619): PHP %s is UNPATCHED — actively exploited in the wild via session.upload_progress multipart requests';
+
+// Blank out comments before pattern matching so docblocks and inline notes never
+// trigger rules (they are full of backticks, example code, and prose). Newlines are
+// preserved byte-for-byte, so line numbers still match the original source.
+function strip_comments(string $code): string {
+    $out = '';
+    foreach (token_get_all($code) as $t) {
+        if (is_array($t)) {
+            if ($t[0] === T_COMMENT || $t[0] === T_DOC_COMMENT) {
+                $nl = substr_count($t[1], "\n");
+                $out .= $nl > 0 ? str_repeat("\n", $nl) : ' ';
+            } else {
+                $out .= $t[1];
+            }
+        } else {
+            $out .= $t;
+        }
+    }
+    return $out;
+}
+
+// Backtick shell strings are only the `token` when PHP parses them as code —
+// the same characters inside SQL strings are MySQL identifier quoting. Token data
+// tells the two apart; returns the opening line of every interpolating backtick
+// string. Executed code may span lines, so the caller reports the opening line.
+function backtick_shell_lines(string $code): array {
+    $out = [];
+    $open = false; $tainted = false; $start = 0; $line = 1;
+    foreach (token_get_all($code) as $t) {
+        $text = is_array($t) ? $t[1] : $t;
+        if ($text === '`') {
+            if (!$open) { $open = true; $tainted = false; $start = $line; }
+            else { if ($tainted) $out[] = $start; $open = false; }
+        } elseif ($open && is_array($t) && $t[0] === T_VARIABLE) {
+            $tainted = true;
+        }
+        $line += substr_count($text, "\n");
+    }
+    return $out;
+}
 
 function php2shell_check(?string $version): ?array {
     if (!$version || !preg_match('/^(\d+)\.(\d+)(?:\.(\d+))?/', trim($version), $m)) return null;
@@ -410,15 +449,28 @@ foreach ($files as $file) {
     }
 
     $lines = explode("\n", $code);
+    $scan  = strip_comments($code);
     foreach ($RULES as $rule) {
+        if (($rule['token'] ?? null) === 'backtick') {
+            foreach (backtick_shell_lines($code) as $line) {
+                $snippet = trim($lines[$line - 1] ?? '') ?: '(multi-line match)';
+                if (mb_strlen($snippet) > 160) $snippet = mb_substr($snippet, 0, 157) . '...';
+                $findings[] = [
+                    'rule' => $rule['id'], 'severity' => $rule['severity'],
+                    'message' => $rule['message'], 'file' => $file, 'line' => $line,
+                    'snippet' => $snippet, 'fix' => $rule['fix'],
+                ];
+            }
+            continue;
+        }
         // Find every match, with correct line numbers (multi-line safe).
         $offset = 0;
-        while (preg_match($rule['pattern'], $code, $m, PREG_OFFSET_CAPTURE, $offset)) {
+        while (preg_match($rule['pattern'], $scan, $m, PREG_OFFSET_CAPTURE, $offset)) {
             $matchStart = $m[0][1];
-            $line = substr_count($code, "\n", 0, $matchStart) + 1;
+            $line = substr_count($scan, "\n", 0, $matchStart) + 1;
             // unless-guard: skip when the matched line (or its neighbors) already mitigates
             if (!empty($rule['unless'])) {
-                $ctx = ($lines[$line - 2] ?? '') . "\n" . ($lines[$line - 1] ?? '') . "\n" . ($lines[$line] ?? '');
+                $ctx = $m[0][0] . "\n" . ($lines[$line - 2] ?? '') . "\n" . ($lines[$line - 1] ?? '') . "\n" . ($lines[$line] ?? '');
                 if (@preg_match($rule['unless'], $ctx)) { $offset = $matchStart + max(1, strlen($m[0][0])); continue; }
             }
             $snippet = trim($lines[$line - 1] ?? '') ?: '(multi-line match)';
